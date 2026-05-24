@@ -577,8 +577,48 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+// PUT Route: Update a team member (role, title, name, password)
+app.put('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, role, title, password } = req.body;
+
+    const updateFields = {};
+    if (name !== undefined) updateFields.name = name;
+    if (email !== undefined) updateFields.email = email;
+    if (role !== undefined) updateFields.role = role;
+    if (title !== undefined) updateFields.title = title;
+
+    // If a new password is provided, hash it before saving
+    if (password && password.length >= 6) {
+      const salt = await bcrypt.genSalt(10);
+      updateFields.password = await bcrypt.hash(password, salt);
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(id, updateFields, { new: true }).select('-password');
+    if (!updatedUser) return res.status(404).json({ success: false, message: 'User not found' });
+
+    res.status(200).json({ success: true, data: updatedUser, message: 'User updated successfully.' });
+  } catch (error) {
+    console.error("Error updating user:", error);
+    res.status(500).json({ success: false, message: 'Server error. Could not update user.' });
+  }
+});
+
+// DELETE Route: Remove a team member
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await User.findByIdAndDelete(id);
+    res.status(200).json({ success: true, message: 'User deleted successfully.' });
+  } catch (error) {
+    console.error("Error deleting user:", error);
+    res.status(500).json({ success: false, message: 'Server error. Could not delete user.' });
+  }
+});
+
 // --- SERVER STARTUP ---
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server is up and running on port ${PORT}`);
+  console.log(`\uD83D\uDE80 Server is up and running on port ${PORT}`);
 });
