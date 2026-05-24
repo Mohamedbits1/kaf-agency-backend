@@ -9,6 +9,7 @@ const userSchema = new mongoose.Schema({
     enum: ['Admin', 'Sales'], // The two access levels
     default: 'Sales' 
   },
+  title: { type: String, default: 'Agent' },
   createdAt: { type: Date, default: Date.now }
 });
 

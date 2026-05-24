@@ -4,6 +4,9 @@ const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 
 // Import your Database Models
 const Contact = require('./models/Contact');
@@ -17,9 +20,34 @@ dotenv.config();
 // Initialize the Express application
 const app = express();
 
+// Configure upload directory and Multer
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+});
+
 // --- MIDDLEWARE ---
-app.use(cors()); 
-app.use(express.json()); 
+// --- MIDDLEWARE ---
+app.use(cors({
+  origin: ['http://kafmarketingagency.com', 'https://kafmarketingagency.com', 'http://localhost:5173']
+})); 
+app.use(express.json());
+app.use('/uploads', express.static(uploadDir)); 
 
 // --- DATABASE CONNECTION ---
 mongoose.connect(process.env.MONGO_URI)
@@ -34,7 +62,7 @@ mongoose.connect(process.env.MONGO_URI)
 // 1. REGISTER ROUTE (Create a new User/Admin)
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, title } = req.body;
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
@@ -48,7 +76,8 @@ app.post('/api/auth/register', async (req, res) => {
       name,
       email,
       password: hashedPassword,
-      role: role || 'Admin' // Default to Admin if no role is provided
+      role: role || 'Sales', // Default to Sales if no role is provided
+      title: title || 'Agent'
     });
 
     await newUser.save();
@@ -112,6 +141,47 @@ app.post('/api/contact', async (req, res) => {
   } catch (error) {
     console.error("Error saving contact:", error); 
     res.status(500).json({ success: false, message: 'Server error. Could not save message.' });
+  }
+});
+
+// 1b. POST ROUTE: Receive brief questionnaire submission with optional file upload
+app.post('/api/contact/brief', upload.single('logo'), async (req, res) => {
+  try {
+    const { name, email, phone, service, briefAnswers, socialMedia, additionalInfo } = req.body;
+
+    let parsedBriefAnswers = null;
+    if (briefAnswers) {
+      try {
+        parsedBriefAnswers = JSON.parse(briefAnswers);
+      } catch (err) {
+        parsedBriefAnswers = briefAnswers;
+      }
+    }
+
+    let logoUrl = '';
+    if (req.file) {
+      logoUrl = `/uploads/${req.file.filename}`;
+    }
+
+    const newContact = new Contact({
+      name,
+      email,
+      phone,
+      service: service || 'General Inquiry',
+      message: additionalInfo || 'Submitted via Brief Questionnaire',
+      source: 'Brief Questionnaire',
+      status: 'New Lead',
+      briefAnswers: parsedBriefAnswers,
+      socialMedia: socialMedia || '',
+      logoUrl: logoUrl,
+      additionalInfo: additionalInfo || ''
+    });
+
+    await newContact.save();
+    res.status(201).json({ success: true, message: 'Brief questionnaire saved successfully!', data: newContact });
+  } catch (error) {
+    console.error("Error saving brief questionnaire:", error);
+    res.status(500).json({ success: false, message: 'Server error. Could not save brief questionnaire.' });
   }
 });
 

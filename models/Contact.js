@@ -18,6 +18,10 @@ const contactSchema = new mongoose.Schema({
   },
   value: { type: Number, default: 0 },
   source: { type: String, default: 'Website' },
+  briefAnswers: { type: mongoose.Schema.Types.Mixed, default: null },
+  socialMedia: { type: String, default: '' },
+  logoUrl: { type: String, default: '' },
+  additionalInfo: { type: String, default: '' },
   notes: [{
     text: { type: String, required: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
