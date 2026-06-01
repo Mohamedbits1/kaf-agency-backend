@@ -62,10 +62,11 @@ mongoose.connect(process.env.MONGO_URI)
 // 1. REGISTER ROUTE (Create a new User/Admin)
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, role, title } = req.body;
+    const { name, password, role, title } = req.body;
+    const email = req.body.email.toLowerCase().trim();
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
+    // Check if user already exists (case insensitive)
+    const existingUser = await User.findOne({ email: { $regex: new RegExp(`^${email}$`, 'i') } });
     if (existingUser) return res.status(400).json({ success: false, message: 'User already exists' });
 
     // Encrypt the password before saving it
@@ -92,9 +93,10 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+    const normalizedEmail = email.toLowerCase().trim();
 
-    // Find the user by email
-    const user = await User.findOne({ email });
+    // Find the user by email (case insensitive)
+    const user = await User.findOne({ email: { $regex: new RegExp(`^${normalizedEmail}$`, 'i') } });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
     // Compare the typed password with the encrypted password in the database
