@@ -466,25 +466,40 @@ app.put('/api/tasks/:id', async (req, res) => {
   }
 });
 
-// 4. POST A TASK COMMENT
-app.post('/api/tasks/:id/comments', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { text, userId } = req.body;
-    if (!text || !userId) return res.status(400).json({ success: false, message: 'Text and userId are required' });
+  // 4. POST A TASK COMMENT
+  app.post('/api/tasks/:id/comments', upload.single('attachment'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { text, userId } = req.body;
+      
+      let attachmentUrl = null;
+      if (req.file) {
+        attachmentUrl = `/uploads/${req.file.filename}`;
+      }
 
-    const task = await Task.findByIdAndUpdate(
-      id,
-      { $push: { comments: { text, createdBy: userId } } },
-      { new: true }
-    ).populate('comments.createdBy', 'name');
+      if (!text && !attachmentUrl) {
+        return res.status(400).json({ success: false, message: 'Comment text or attachment is required' });
+      }
+      if (!userId) {
+        return res.status(400).json({ success: false, message: 'userId is required' });
+      }
+  
+      const commentData = { createdBy: userId };
+      if (text) commentData.text = text;
+      if (attachmentUrl) commentData.attachmentUrl = attachmentUrl;
 
-    res.status(201).json({ success: true, data: task.comments });
-  } catch (error) {
-    console.error("Error adding task comment:", error);
-    res.status(500).json({ success: false, message: 'Server error adding comment.' });
-  }
-});
+      const task = await Task.findByIdAndUpdate(
+        id,
+        { $push: { comments: commentData } },
+        { new: true }
+      ).populate('comments.createdBy', 'name');
+  
+      res.status(201).json({ success: true, data: task.comments });
+    } catch (error) {
+      console.error("Error adding task comment:", error);
+      res.status(500).json({ success: false, message: 'Server error adding comment.' });
+    }
+  });
 
 // ==========================================
 //         ANALYTICS & STATS ROUTES

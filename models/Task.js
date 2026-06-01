@@ -25,7 +25,8 @@ const taskSchema = new mongoose.Schema({
   },
   dueDate: { type: Date, required: false },
   comments: [{
-    text: { type: String, required: true },
+    text: { type: String, required: false },
+    attachmentUrl: { type: String, required: false },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     createdAt: { type: Date, default: Date.now }
   }],
