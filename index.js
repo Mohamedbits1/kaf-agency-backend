@@ -351,6 +351,18 @@ app.put('/api/contact/:id', async (req, res) => {
   }
 });
 
+// 5b. DELETE ROUTE: Delete a lead
+app.delete('/api/contact/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Contact.findByIdAndDelete(id);
+    res.status(200).json({ success: true, message: 'Lead deleted successfully.' });
+  } catch (error) {
+    console.error("Error deleting lead:", error);
+    res.status(500).json({ success: false, message: 'Server error. Could not delete lead.' });
+  }
+});
+
 // 6. POST ROUTE: Add a note to a lead
 app.post('/api/contact/:id/notes', async (req, res) => {
   try {
@@ -472,6 +484,18 @@ app.put('/api/projects/:id', async (req, res) => {
   } catch (error) {
     console.error("Error updating project:", error);
     res.status(500).json({ success: false, message: 'Server error updating project.' });
+  }
+});
+
+// 4. DELETE A PROJECT
+app.delete('/api/projects/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Project.findByIdAndDelete(id);
+    res.status(200).json({ success: true, message: 'Project deleted successfully.' });
+  } catch (error) {
+    console.error("Error deleting project:", error);
+    res.status(500).json({ success: false, message: 'Server error deleting project.' });
   }
 });
 
