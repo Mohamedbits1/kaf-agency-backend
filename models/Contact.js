@@ -8,8 +8,8 @@ const contactSchema = new mongoose.Schema({
   message: { type: String, required: false },
   status: { 
     type: String, 
-    enum: ['New Lead', 'Contacted', 'In Progress', 'Proposal Sent', 'Closed - Won', 'Closed - Lost'],
-    default: 'New Lead' 
+    enum: ['Inbox', 'New Lead', 'Contacted', 'In Progress', 'Proposal Sent', 'Closed - Won', 'Closed - Lost'],
+    default: 'Inbox' 
   },
   assignedTo: { 
     type: mongoose.Schema.Types.ObjectId, 

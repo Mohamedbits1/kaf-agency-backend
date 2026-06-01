@@ -13,6 +13,7 @@ const Contact = require('./models/Contact');
 const User = require('./models/User');
 const Project = require('./models/Project');
 const Task = require('./models/Task');
+const Notification = require('./models/Notification');
 
 // Load environment variables (.env file)
 dotenv.config();
@@ -134,10 +135,19 @@ app.post('/api/contact', async (req, res) => {
       phone,
       service,
       message,
-      status: 'New Lead'
+      status: 'Inbox'
     });
 
     await newContact.save();
+
+    // Notify all Admins and Managers
+    const admins = await User.find({ role: { $in: ['Admin', 'Manager'] } });
+    const io = req.app.get('io');
+    const connectedUsers = req.app.get('connectedUsers');
+    for (const admin of admins) {
+      await dispatchNotification(admin._id, null, 'New Message', 'New Website Message', `New message from ${name}`, '/admin/inbox', io, connectedUsers);
+    }
+
     res.status(201).json({ success: true, message: 'Message saved to CRM successfully!' });
     
   } catch (error) {
@@ -172,7 +182,7 @@ app.post('/api/contact/brief', upload.single('logo'), async (req, res) => {
       service: service || 'General Inquiry',
       message: additionalInfo || 'Submitted via Brief Questionnaire',
       source: 'Brief Questionnaire',
-      status: 'New Lead',
+      status: 'Inbox',
       briefAnswers: parsedBriefAnswers,
       socialMedia: socialMedia || '',
       logoUrl: logoUrl,
@@ -180,6 +190,15 @@ app.post('/api/contact/brief', upload.single('logo'), async (req, res) => {
     });
 
     await newContact.save();
+
+    // Notify all Admins and Managers
+    const admins = await User.find({ role: { $in: ['Admin', 'Manager'] } });
+    const io = req.app.get('io');
+    const connectedUsers = req.app.get('connectedUsers');
+    for (const admin of admins) {
+      await dispatchNotification(admin._id, null, 'New Brief', 'New Client Brief', `New brief from ${name}`, '/admin/inbox', io, connectedUsers);
+    }
+
     res.status(201).json({ success: true, message: 'Brief questionnaire saved successfully!', data: newContact });
   } catch (error) {
     console.error("Error saving brief questionnaire:", error);
@@ -236,6 +255,48 @@ app.post('/api/contacts', async (req, res) => {
   } catch (error) {
     console.error("Error creating manual lead:", error);
     res.status(500).json({ success: false, message: 'Server error. Could not create lead.' });
+  }
+});
+
+// 4b. POST ROUTE: Merge an Inbox message/brief into an existing Lead
+app.post('/api/contact/:id/merge', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { targetLeadId, userId } = req.body;
+    
+    if (!targetLeadId || !userId) {
+      return res.status(400).json({ success: false, message: 'Target Lead ID and User ID are required.' });
+    }
+
+    const inboxMessage = await Contact.findById(id);
+    if (!inboxMessage) return res.status(404).json({ success: false, message: 'Inbox message not found.' });
+    
+    const targetLead = await Contact.findById(targetLeadId);
+    if (!targetLead) return res.status(404).json({ success: false, message: 'Target lead not found.' });
+
+    // Append inbox data as a note to target lead
+    let noteText = `Merged from Inbox:\nSource: ${inboxMessage.source}\nEmail: ${inboxMessage.email || 'N/A'}\nPhone: ${inboxMessage.phone || 'N/A'}\nMessage: ${inboxMessage.message || 'None'}`;
+    
+    if (inboxMessage.briefAnswers) {
+      noteText += `\nBrief Answers: Attached.`;
+      // Optionally merge briefAnswers if target doesn't have them
+      if (!targetLead.briefAnswers) {
+        targetLead.briefAnswers = inboxMessage.briefAnswers;
+      }
+    }
+
+    targetLead.notes.push({ text: noteText, createdBy: userId });
+    targetLead.history.push({ action: 'Merged message from Inbox', changedBy: userId });
+    
+    await targetLead.save();
+    
+    // Delete the inbox message
+    await Contact.findByIdAndDelete(id);
+
+    res.status(200).json({ success: true, message: 'Message merged successfully!' });
+  } catch (error) {
+    console.error("Error merging message:", error);
+    res.status(500).json({ success: false, message: 'Server error. Could not merge message.' });
   }
 });
 
@@ -385,6 +446,14 @@ app.post('/api/projects', async (req, res) => {
     // Auto-update the lead status to "Closed - Won"
     await Contact.findByIdAndUpdate(client, { status: 'Closed - Won' });
 
+    // Notify Admins/Managers
+    const admins = await User.find({ role: { $in: ['Admin', 'Manager'] } });
+    const io = req.app.get('io');
+    const connectedUsers = req.app.get('connectedUsers');
+    for (const admin of admins) {
+      await dispatchNotification(admin._id, null, 'New Project', 'New Project Created', `Project: ${name}`, '/admin/projects', io, connectedUsers);
+    }
+
     res.status(201).json({ success: true, data: newProject });
   } catch (error) {
     console.error("Error creating project:", error);
@@ -444,6 +513,14 @@ app.post('/api/tasks', async (req, res) => {
       dueDate
     });
     await newTask.save();
+
+    // Notify Assignee
+    if (assignee) {
+      const io = req.app.get('io');
+      const connectedUsers = req.app.get('connectedUsers');
+      await dispatchNotification(assignee, null, 'New Task', 'New Task Assigned', `You have been assigned: ${title}`, '/admin/tasks', io, connectedUsers);
+    }
+
     res.status(201).json({ success: true, data: newTask });
   } catch (error) {
     console.error("Error creating task:", error);
@@ -494,6 +571,38 @@ app.put('/api/tasks/:id', async (req, res) => {
         { new: true }
       ).populate('comments.createdBy', 'name');
   
+      const io = req.app.get('io');
+      const connectedUsers = req.app.get('connectedUsers');
+      
+      // Notify Assignee if they are not the commenter
+      if (task.assignee && task.assignee.toString() !== userId) {
+        await dispatchNotification(task.assignee, userId, 'Task Update', 'New Comment on Task', `New comment on: ${task.title}`, '/admin/tasks', io, connectedUsers);
+      }
+
+      // Handle Mentions: Extract @UserName
+      if (text) {
+        // e.g., @Ahmed or @JaneDoe
+        const mentionRegex = /@([\p{L}\p{N}_.-]+)/gu;
+        let match;
+        const mentionedNames = [];
+        while ((match = mentionRegex.exec(text)) !== null) {
+          mentionedNames.push(match[1]);
+        }
+        
+        if (mentionedNames.length > 0) {
+          // Find any users whose name starts with these words (case insensitive)
+          const nameRegexes = mentionedNames.map(name => new RegExp(`^${name}`, 'i'));
+          const mentionedUsers = await User.find({ name: { $in: nameRegexes } });
+          
+          for (const mUser of mentionedUsers) {
+            // Don't notify the commenter themselves
+            if (mUser._id.toString() !== userId) {
+              await dispatchNotification(mUser._id, userId, 'Mention', 'You were mentioned', `You were mentioned in task: ${task.title}`, '/admin/tasks', io, connectedUsers);
+            }
+          }
+        }
+      }
+
       res.status(201).json({ success: true, data: task.comments });
     } catch (error) {
       console.error("Error adding task comment:", error);
@@ -634,8 +743,105 @@ app.delete('/api/users/:id', async (req, res) => {
   }
 });
 
+// ==========================================
+//          NOTIFICATIONS API ROUTES
+// ==========================================
+
+// GET Route: Fetch all notifications for a specific user
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ success: false, message: 'User ID is required' });
+
+    const notifications = await Notification.find({ recipient: userId })
+      .populate('sender', 'name')
+      .sort({ createdAt: -1 })
+      .limit(50); // Get latest 50
+    res.status(200).json({ success: true, data: notifications });
+  } catch (error) {
+    console.error("Error fetching notifications:", error);
+    res.status(500).json({ success: false, message: 'Server error. Could not fetch notifications.' });
+  }
+});
+
+// PUT Route: Mark notification as read
+app.put('/api/notifications/:id/read', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const notification = await Notification.findByIdAndUpdate(id, { isRead: true }, { new: true });
+    if (!notification) return res.status(404).json({ success: false, message: 'Notification not found' });
+    res.status(200).json({ success: true, data: notification });
+  } catch (error) {
+    console.error("Error marking notification read:", error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+// Helper function to dispatch notifications
+const dispatchNotification = async (recipientId, senderId, type, title, message, link, io, connectedUsers) => {
+  try {
+    const notif = new Notification({
+      recipient: recipientId,
+      sender: senderId,
+      type,
+      title,
+      message,
+      link
+    });
+    await notif.save();
+    
+    // Find populated sender name for real-time emit
+    const populatedNotif = await Notification.findById(notif._id).populate('sender', 'name');
+
+    // Emit if user is connected
+    const socketId = connectedUsers.get(recipientId.toString());
+    if (socketId && io) {
+      io.to(socketId).emit('notification', populatedNotif);
+    }
+  } catch (error) {
+    console.error('Error dispatching notification:', error);
+  }
+};
+
+
 // --- SERVER STARTUP ---
+const http = require('http');
+const { Server } = require('socket.io');
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE']
+  }
+});
+
+app.set('io', io);
+
+// Connected users map
+const connectedUsers = new Map();
+app.set('connectedUsers', connectedUsers);
+
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.id);
+  
+  socket.on('register', (userId) => {
+    connectedUsers.set(userId, socket.id);
+    console.log(`User ${userId} registered with socket ${socket.id}`);
+  });
+
+  socket.on('disconnect', () => {
+    for (const [userId, socketId] of connectedUsers.entries()) {
+      if (socketId === socket.id) {
+        connectedUsers.delete(userId);
+        console.log(`User ${userId} disconnected`);
+        break;
+      }
+    }
+  });
+});
+
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`\uD83D\uDE80 Server is up and running on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`🚀 Server is up and running on port ${PORT}`);
 });
