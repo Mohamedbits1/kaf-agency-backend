@@ -44,8 +44,8 @@ const upload = multer({
 // --- MIDDLEWARE ---
 // --- MIDDLEWARE ---
 app.use(cors({
-  origin: ['http://kafmarketingagency.com', 'https://kafmarketingagency.com', 'http://localhost:5173']
-})); 
+  origin: ['http://kafmarketingagency.com', 'https://kafmarketingagency.com', 'http://www.kafmarketingagency.com', 'https://www.kafmarketingagency.com', 'http://localhost:5173', 'http://localhost:5174']
+}));
 app.use(express.json());
 app.use('/uploads', express.static(uploadDir)); 
 
