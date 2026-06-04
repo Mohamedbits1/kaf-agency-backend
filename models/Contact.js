@@ -18,6 +18,12 @@ const contactSchema = new mongoose.Schema({
   },
   value: { type: Number, default: 0 },
   source: { type: String, default: 'Website' },
+  company: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Company',
+    default: null 
+  },
+  companyName: { type: String, default: '' },
   briefAnswers: { type: mongoose.Schema.Types.Mixed, default: null },
   socialMedia: { type: String, default: '' },
   logoUrl: { type: String, default: '' },

@@ -14,6 +14,8 @@ const User = require('./models/User');
 const Project = require('./models/Project');
 const Task = require('./models/Task');
 const Notification = require('./models/Notification');
+const Company = require('./models/Company');
+const Event = require('./models/Event');
 
 // Load environment variables (.env file)
 dotenv.config();
@@ -211,6 +213,7 @@ app.get('/api/contacts', async (req, res) => {
   try {
     const contacts = await Contact.find()
       .populate('assignedTo', 'name email role')
+      .populate('company', 'name website')
       .sort({ createdAt: -1 });
     res.status(200).json({ success: true, data: contacts });
   } catch (error) {
@@ -224,6 +227,7 @@ app.get('/api/contact/:id', async (req, res) => {
   try {
     const contact = await Contact.findById(req.params.id)
       .populate('assignedTo', 'name email role')
+      .populate('company')
       .populate('notes.createdBy', 'name')
       .populate('calls.loggedBy', 'name')
       .populate('history.changedBy', 'name');
@@ -238,7 +242,18 @@ app.get('/api/contact/:id', async (req, res) => {
 // 4. POST ROUTE: Add a manual lead inside the admin dashboard
 app.post('/api/contacts', async (req, res) => {
   try {
-    const { name, email, phone, service, message, value, source, assignedTo } = req.body;
+    const { name, email, phone, service, message, value, source, assignedTo, companyName } = req.body;
+    
+    let companyId = null;
+    if (companyName && companyName.trim() !== '') {
+      let company = await Company.findOne({ name: { $regex: new RegExp(`^${companyName.trim()}$`, 'i') } });
+      if (!company) {
+        company = new Company({ name: companyName.trim() });
+        await company.save();
+      }
+      companyId = company._id;
+    }
+
     const newContact = new Contact({
       name,
       email,
@@ -248,6 +263,8 @@ app.post('/api/contacts', async (req, res) => {
       value: value || 0,
       source: source || 'Manual',
       assignedTo: assignedTo || null,
+      company: companyId,
+      companyName: companyName ? companyName.trim() : '',
       status: 'New Lead'
     });
     await newContact.save();
@@ -304,10 +321,32 @@ app.post('/api/contact/:id/merge', async (req, res) => {
 app.put('/api/contact/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, value, source, assignedTo, name, email, phone, service, message, userId } = req.body;
+    const { status, value, source, assignedTo, name, email, phone, service, message, userId, companyName, companyId } = req.body;
 
     const oldContact = await Contact.findById(id);
     if (!oldContact) return res.status(404).json({ success: false, message: 'Contact not found' });
+
+    let finalCompanyId = oldContact.company;
+    let finalCompanyName = oldContact.companyName;
+
+    // Handle company assignment or creation
+    if (companyId !== undefined) {
+      finalCompanyId = companyId === '' ? null : companyId;
+      if (companyId) {
+        const c = await Company.findById(companyId);
+        if (c) finalCompanyName = c.name;
+      } else {
+        finalCompanyName = '';
+      }
+    } else if (companyName !== undefined && companyName.trim() !== '') {
+      let company = await Company.findOne({ name: { $regex: new RegExp(`^${companyName.trim()}$`, 'i') } });
+      if (!company) {
+        company = new Company({ name: companyName.trim() });
+        await company.save();
+      }
+      finalCompanyId = company._id;
+      finalCompanyName = company.name;
+    }
 
     const historyEntries = [];
     if (status && status !== oldContact.status) {
@@ -332,7 +371,9 @@ app.put('/api/contact/:id', async (req, res) => {
       email: email !== undefined ? email : oldContact.email,
       phone: phone !== undefined ? phone : oldContact.phone,
       service: service !== undefined ? service : oldContact.service,
-      message: message !== undefined ? message : oldContact.message
+      message: message !== undefined ? message : oldContact.message,
+      company: finalCompanyId,
+      companyName: finalCompanyName
     };
 
     const updatedContact = await Contact.findByIdAndUpdate(
@@ -418,6 +459,64 @@ app.post('/api/contact/:id/calls', async (req, res) => {
   } catch (error) {
     console.error("Error logging call:", error);
     res.status(500).json({ success: false, message: 'Server error. Could not log call.' });
+  }
+});
+
+// ==========================================
+//             COMPANY API ROUTES
+// ==========================================
+
+// 1. GET ALL COMPANIES
+app.get('/api/companies', async (req, res) => {
+  try {
+    const companies = await Company.find().sort({ createdAt: -1 });
+    res.status(200).json({ success: true, data: companies });
+  } catch (error) {
+    console.error("Error fetching companies:", error);
+    res.status(500).json({ success: false, message: 'Server error fetching companies.' });
+  }
+});
+
+// 2. CREATE COMPANY
+app.post('/api/companies', async (req, res) => {
+  try {
+    const { name, details, website } = req.body;
+    let company = await Company.findOne({ name: { $regex: new RegExp(`^${name.trim()}$`, 'i') } });
+    if (company) {
+      return res.status(400).json({ success: false, message: 'Company already exists' });
+    }
+    company = new Company({ name: name.trim(), details, website });
+    await company.save();
+    res.status(201).json({ success: true, data: company });
+  } catch (error) {
+    console.error("Error creating company:", error);
+    res.status(500).json({ success: false, message: 'Server error creating company.' });
+  }
+});
+
+// 3. UPDATE COMPANY
+app.put('/api/companies/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updatedCompany = await Company.findByIdAndUpdate(id, req.body, { new: true });
+    res.status(200).json({ success: true, data: updatedCompany });
+  } catch (error) {
+    console.error("Error updating company:", error);
+    res.status(500).json({ success: false, message: 'Server error updating company.' });
+  }
+});
+
+// 4. DELETE COMPANY
+app.delete('/api/companies/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Company.findByIdAndDelete(id);
+    // Remove company reference from contacts
+    await Contact.updateMany({ company: id }, { $set: { company: null, companyName: '' } });
+    res.status(200).json({ success: true, message: 'Company deleted successfully.' });
+  } catch (error) {
+    console.error("Error deleting company:", error);
+    res.status(500).json({ success: false, message: 'Server error deleting company.' });
   }
 });
 
@@ -798,6 +897,136 @@ app.put('/api/notifications/:id/read', async (req, res) => {
   } catch (error) {
     console.error("Error marking notification read:", error);
     res.status(500).json({ success: false, message: 'Server error.' });
+  }
+});
+
+/* -------------------------------------------------------------------------- */
+/*                        EVENT & CALENDAR ROUTES                             */
+/* -------------------------------------------------------------------------- */
+
+// Unified Calendar Feed (Events + Tasks + Projects)
+app.get('/api/calendar', async (req, res) => {
+  try {
+    // Fetch normal events
+    const events = await Event.find().populate('attendees', 'name email').populate('relatedLead', 'name companyName');
+    
+    // Fetch Tasks with dueDates
+    const tasks = await Task.find({ dueDate: { $ne: null } }).populate('assignee', 'name');
+    
+    // Fetch Projects with endDates
+    const projects = await Project.find({ endDate: { $ne: null } });
+
+    // Normalize to a single array
+    const calendarItems = [];
+
+    events.forEach(e => {
+      calendarItems.push({
+        _id: e._id,
+        title: e.title,
+        start: e.start,
+        end: e.end,
+        type: e.type, // 'Meeting'
+        description: e.description,
+        attendees: e.attendees,
+        relatedLead: e.relatedLead,
+        meetingMinutes: e.meetingMinutes,
+        createdBy: e.createdBy
+      });
+    });
+
+    tasks.forEach(t => {
+      calendarItems.push({
+        _id: t._id,
+        title: `Task Deadline: ${t.title}`,
+        start: t.dueDate,
+        end: t.dueDate,
+        type: 'Task Deadline',
+        description: t.description,
+        status: t.status,
+        assignee: t.assignee
+      });
+    });
+
+    projects.forEach(p => {
+      calendarItems.push({
+        _id: p._id,
+        title: `Project Deadline: ${p.name}`,
+        start: p.endDate,
+        end: p.endDate,
+        type: 'Project Deadline',
+        status: p.status
+      });
+    });
+
+    res.json({ success: true, data: calendarItems });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Get Events
+app.get('/api/events', async (req, res) => {
+  try {
+    const events = await Event.find()
+      .populate('attendees', 'name email')
+      .populate('relatedLead', 'name companyName')
+      .sort({ start: 1 });
+    res.json({ success: true, data: events });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Create Event
+app.post('/api/events', async (req, res) => {
+  try {
+    const { title, description, start, end, type, attendees, relatedLead, userId } = req.body;
+    
+    // Find a fallback user if userId is not provided
+    let creatorId = userId;
+    if (!creatorId) {
+      const defaultUser = await User.findOne();
+      creatorId = defaultUser ? defaultUser._id : null;
+    }
+
+    const newEvent = new Event({
+      title,
+      description,
+      start,
+      end,
+      type: type || 'Meeting',
+      attendees: attendees || [],
+      relatedLead: relatedLead || null,
+      createdBy: creatorId
+    });
+    
+    await newEvent.save();
+    
+    const populated = await Event.findById(newEvent._id)
+      .populate('attendees', 'name')
+      .populate('relatedLead', 'name');
+      
+    res.status(201).json({ success: true, data: populated });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to create event' });
+  }
+});
+
+// Update Meeting Minutes
+app.put('/api/events/:id/minutes', async (req, res) => {
+  try {
+    const { meetingMinutes } = req.body;
+    const event = await Event.findByIdAndUpdate(
+      req.params.id,
+      { meetingMinutes },
+      { new: true }
+    ).populate('attendees', 'name').populate('relatedLead', 'name companyName');
+    
+    if (!event) return res.status(404).json({ success: false, message: 'Event not found' });
+    
+    res.json({ success: true, data: event });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to update minutes' });
   }
 });
 
