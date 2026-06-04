@@ -480,13 +480,21 @@ app.get('/api/companies', async (req, res) => {
 // 2. CREATE COMPANY
 app.post('/api/companies', async (req, res) => {
   try {
-    const { name, details, website } = req.body;
+    const { name, details, website, linkedLeads } = req.body;
     let company = await Company.findOne({ name: { $regex: new RegExp(`^${name.trim()}$`, 'i') } });
     if (company) {
       return res.status(400).json({ success: false, message: 'Company already exists' });
     }
     company = new Company({ name: name.trim(), details, website });
     await company.save();
+
+    if (Array.isArray(linkedLeads) && linkedLeads.length > 0) {
+      await Contact.updateMany(
+        { _id: { $in: linkedLeads } },
+        { $set: { companyName: company.name } }
+      );
+    }
+
     res.status(201).json({ success: true, data: company });
   } catch (error) {
     console.error("Error creating company:", error);
@@ -498,7 +506,29 @@ app.post('/api/companies', async (req, res) => {
 app.put('/api/companies/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const updatedCompany = await Company.findByIdAndUpdate(id, req.body, { new: true });
+    const { linkedLeads, ...companyData } = req.body;
+
+    const oldCompany = await Company.findById(id);
+    const updatedCompany = await Company.findByIdAndUpdate(id, companyData, { new: true });
+
+    if (oldCompany.name !== updatedCompany.name) {
+      await Contact.updateMany(
+        { companyName: oldCompany.name },
+        { $set: { companyName: updatedCompany.name } }
+      );
+    }
+
+    if (Array.isArray(linkedLeads)) {
+      await Contact.updateMany(
+        { companyName: updatedCompany.name, _id: { $nin: linkedLeads } },
+        { $set: { companyName: '' } }
+      );
+      await Contact.updateMany(
+        { _id: { $in: linkedLeads } },
+        { $set: { companyName: updatedCompany.name } }
+      );
+    }
+
     res.status(200).json({ success: true, data: updatedCompany });
   } catch (error) {
     console.error("Error updating company:", error);
